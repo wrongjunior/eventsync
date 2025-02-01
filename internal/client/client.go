@@ -2,106 +2,55 @@ package client
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"net/url"
 	_ "os"
 	"sync"
 	"time"
 
-	"log/slog"
-
 	"github.com/gorilla/websocket"
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/wrongjunior/eventsync/internal/domain"
+	"github.com/wrongjunior/eventsync/internal/repository"
+	"log/slog"
 )
 
-// Event представляет событие, получаемое от сервера.
-type Event struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	Message   string    `json:"message"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// EventRepository определяет интерфейс для сохранения событий.
-type EventRepository interface {
-	Init() error
-	Save(event Event) error
-}
-
-// SQLiteRepository реализует сохранение событий в SQLite.
-type SQLiteRepository struct {
-	db *sql.DB
-}
-
-// NewSQLiteRepository создаёт новый репозиторий для базы данных по указанному пути.
-func NewSQLiteRepository(dbPath string) (*SQLiteRepository, error) {
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return nil, err
-	}
-	return &SQLiteRepository{db: db}, nil
-}
-
-// Init создаёт таблицу для хранения событий.
-func (repo *SQLiteRepository) Init() error {
-	query := `
-        CREATE TABLE IF NOT EXISTS events (
-            id TEXT PRIMARY KEY,
-            type TEXT,
-            message TEXT,
-            timestamp DATETIME
-        );
-    `
-	_, err := repo.db.Exec(query)
-	return err
-}
-
-// Save сохраняет событие, если его там ещё нет.
-func (repo *SQLiteRepository) Save(event Event) error {
-	query := `INSERT OR IGNORE INTO events (id, type, message, timestamp) VALUES (?, ?, ?, ?);`
-	_, err := repo.db.Exec(query, event.ID, event.Type, event.Message, event.Timestamp)
-	return err
-}
-
-// Client реализует логику подключения к серверу, фильтрации дубликатов и сохранения событий.
-type Client struct {
-	serverURL   string
-	conn        *websocket.Conn
-	repo        EventRepository
-	logger      *slog.Logger
-	receivedIDs map[string]struct{}
-	mu          sync.Mutex
-	// Флаг переподключения.
+// ClientService реализует клиентскую логику: подключение, получение событий, фильтрация и сохранение.
+type ClientService struct {
+	serverURL    string
+	conn         *websocket.Conn
+	repo         domain.EventRepository
+	logger       *slog.Logger
+	receivedIDs  map[string]struct{}
+	mu           sync.Mutex
 	reconnecting bool
 	done         chan struct{}
 }
 
-// NewClient создаёт нового клиента с подключением к серверу и инициализацией репозитория.
-func NewClient(serverURL, dbPath string, logger *slog.Logger) (*Client, error) {
-	repo, err := NewSQLiteRepository(dbPath)
+// NewClientService создаёт нового клиента, подключается к серверу и инициализирует репозиторий.
+func NewClientService(serverURL, dbPath string, logger *slog.Logger) (*ClientService, error) {
+	repo, err := repository.NewSQLiteRepository(dbPath)
 	if err != nil {
 		return nil, err
 	}
 	if err := repo.Init(); err != nil {
 		return nil, err
 	}
-	c := &Client{
+	cs := &ClientService{
 		serverURL:   serverURL,
 		repo:        repo,
 		logger:      logger,
 		receivedIDs: make(map[string]struct{}),
 		done:        make(chan struct{}),
 	}
-	if err := c.connect(); err != nil {
+	if err := cs.connect(); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return cs, nil
 }
 
 // connect устанавливает WebSocket-соединение с сервером.
-func (c *Client) connect() error {
-	u, err := url.Parse(c.serverURL)
+func (cs *ClientService) connect() error {
+	u, err := url.Parse(cs.serverURL)
 	if err != nil {
 		return err
 	}
@@ -109,88 +58,87 @@ func (c *Client) connect() error {
 	if err != nil {
 		return err
 	}
-	c.conn = conn
-	c.logger.Info("Подключение к серверу установлено", "url", c.serverURL)
+	cs.conn = conn
+	cs.logger.Info("Подключение к серверу установлено", "url", cs.serverURL)
 	return nil
 }
 
-// Listen запускает цикл получения сообщений от сервера с автоматическим переподключением.
-func (c *Client) Listen(ctx context.Context) {
-	go c.listenLoop(ctx)
-	<-c.done
+// Listen запускает цикл получения сообщений с автоматическим переподключением.
+func (cs *ClientService) Listen(ctx context.Context) {
+	go cs.listenLoop(ctx)
+	<-cs.done
 }
 
-func (c *Client) listenLoop(ctx context.Context) {
-	defer close(c.done)
+func (cs *ClientService) listenLoop(ctx context.Context) {
+	defer close(cs.done)
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("Завершение работы клиента по сигналу контекста")
+			cs.logger.Info("Завершение работы клиента по сигналу контекста")
 			return
 		default:
-			_, message, err := c.conn.ReadMessage()
+			_, message, err := cs.conn.ReadMessage()
 			if err != nil {
-				c.logger.Error("Ошибка чтения", "error", err)
-				c.reconnect(ctx)
+				cs.logger.Error("Ошибка чтения", "error", err)
+				cs.reconnect(ctx)
 				continue
 			}
-			var event Event
+			var event domain.Event
 			if err := json.Unmarshal(message, &event); err != nil {
-				c.logger.Error("Ошибка декодирования JSON", "error", err)
+				cs.logger.Error("Ошибка декодирования JSON", "error", err)
 				continue
 			}
-			c.processEvent(event)
+			cs.processEvent(event)
 		}
 	}
 }
 
-// processEvent фильтрует дубликаты и сохраняет уникальное событие.
-func (c *Client) processEvent(event Event) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.receivedIDs[event.ID]; exists {
-		c.logger.Info("Дублирующее событие отфильтровано", "id", event.ID)
+// processEvent фильтрует дубликаты и сохраняет событие.
+func (cs *ClientService) processEvent(event domain.Event) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if _, exists := cs.receivedIDs[event.ID]; exists {
+		cs.logger.Info("Дублирующее событие отфильтровано", "id", event.ID)
 		return
 	}
-	c.receivedIDs[event.ID] = struct{}{}
-	c.logger.Info("Обработка события", "event", event)
-	if err := c.repo.Save(event); err != nil {
-		c.logger.Error("Ошибка сохранения события", "error", err)
+	cs.receivedIDs[event.ID] = struct{}{}
+	cs.logger.Info("Обработка события", "event", event)
+	if err := cs.repo.Save(event); err != nil {
+		cs.logger.Error("Ошибка сохранения события", "error", err)
 	}
 }
 
-// reconnect пытается восстановить соединение с сервером с экспоненциальной задержкой.
-func (c *Client) reconnect(ctx context.Context) {
-	c.mu.Lock()
-	if c.reconnecting {
-		c.mu.Unlock()
+// reconnect пытается восстановить соединение с экспоненциальной задержкой.
+func (cs *ClientService) reconnect(ctx context.Context) {
+	cs.mu.Lock()
+	if cs.reconnecting {
+		cs.mu.Unlock()
 		return
 	}
-	c.reconnecting = true
-	c.mu.Unlock()
+	cs.reconnecting = true
+	cs.mu.Unlock()
 
-	c.logger.Info("Попытка переподключения...")
-	// Закрываем существующее соединение.
-	if c.conn != nil {
-		c.conn.Close()
+	cs.logger.Info("Попытка переподключения...")
+	if cs.conn != nil {
+		cs.conn.Close()
 	}
 
 	backoff := time.Second
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("Переподключение отменено (контекст)")
+			cs.logger.Info("Переподключение отменено (контекст)")
 			return
 		default:
-			err := c.connect()
+			err := cs.connect()
 			if err == nil {
-				c.mu.Lock()
-				c.reconnecting = false
-				c.mu.Unlock()
-				c.logger.Info("Переподключение успешно")
+				cs.mu.Lock()
+				cs.reconnecting = false
+				cs.mu.Unlock()
+				cs.logger.Info("Переподключение успешно")
 				return
 			}
-			c.logger.Error("Не удалось переподключиться", "error", err)
+			cs.logger.Error("Не удалось переподключиться", "error", err)
 			time.Sleep(backoff)
 			if backoff < 30*time.Second {
 				backoff *= 2
