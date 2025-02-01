@@ -9,36 +9,40 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wrongjunior/eventsync/internal/config"
+	"github.com/wrongjunior/eventsync/internal/service"
+	transportServer "github.com/wrongjunior/eventsync/internal/transport/server"
 	"log/slog"
-
-	"github.com/wrongjunior/eventsync/internal/server"
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "Адрес сервера (например, :8080)")
+	configPath := flag.String("config", "config.json", "Path to configuration file")
 	flag.Parse()
 
-	// Инициализация slog логгера.
+	cfg, err := config.LoadConfig(*configPath)
+	if err != nil {
+		panic(err)
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 
-	// Создаём экземпляр сервера и запускаем обработку.
-	srv := server.NewServer(logger)
-	srv.Run()
+	// Инициализация бизнес-логики сервера.
+	eventService := service.NewEventService(logger)
+	eventService.StartEventGenerator()
 
-	// Настраиваем маршруты через chi.
-	router := srv.SetupRouter()
+	router := transportServer.SetupRouter(eventService, logger, cfg.WSPath)
 	httpServer := &http.Server{
-		Addr:    *addr,
+		Addr:    cfg.ServerAddr,
 		Handler: router,
 	}
 
-	// Запуск HTTP-сервера в отдельной горутине.
+	// Запуск HTTP-сервера.
 	go func() {
-		logger.Info("Запуск HTTP-сервера", "addr", *addr)
+		logger.Info("Starting HTTP server", "addr", cfg.ServerAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Ошибка HTTP-сервера", "error", err)
+			logger.Error("HTTP server error", "error", err)
 		}
 	}()
 
@@ -47,12 +51,12 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	logger.Info("Получен сигнал завершения. Остановка сервера...")
+	logger.Info("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {
-		logger.Error("Ошибка при завершении HTTP-сервера", "error", err)
+		logger.Error("HTTP server shutdown error", "error", err)
 	}
-	srv.Shutdown()
-	logger.Info("Сервер остановлен")
+	eventService.Shutdown()
+	logger.Info("Server stopped")
 }
