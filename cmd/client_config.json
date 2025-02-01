@@ -1,0 +1,6 @@
+{
+  "client_server_url": "ws://localhost:8080/ws",
+  "db_path": "client.db",
+  "num_clients": 3,
+  "log_level": "INFO"
+}

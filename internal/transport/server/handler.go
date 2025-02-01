@@ -33,13 +33,13 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// Handler обрабатывает WebSocket-соединения.
+// Handler реализует HTTP-обработчик для WebSocket.
 type Handler struct {
 	EventService *eservice.EventService
 	Logger       *slog.Logger
 }
 
-// NewHandler создаёт новый HTTP-обработчик для WebSocket.
+// NewHandler создаёт новый обработчик.
 func NewHandler(es *eservice.EventService, logger *slog.Logger) *Handler {
 	return &Handler{
 		EventService: es,
@@ -47,7 +47,7 @@ func NewHandler(es *eservice.EventService, logger *slog.Logger) *Handler {
 	}
 }
 
-// ServeHTTP выполняет апгрейд соединения и регистрирует клиента в EventService.
+// ServeHTTP выполняет апгрейд соединения и регистрирует клиента.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -58,17 +58,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := &eservice.Client{Notifier: notifier}
 	h.EventService.Register(client)
 
-	// Контекст для управления жизненным циклом соединения.
+	// Создаём контекст для управления жизненным циклом соединения.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	go h.writePump(client, conn, ctx)
-	h.readPump(client, conn)
+	go h.writePump(conn, ctx)
+	h.readPump(conn)
 	h.EventService.Unregister(client)
 }
 
-// readPump читает сообщения (например, пинги) и завершается при ошибке.
-func (h *Handler) readPump(client *eservice.Client, conn *websocket.Conn) {
+// readPump читает входящие сообщения и завершает соединение при ошибке.
+func (h *Handler) readPump(conn *websocket.Conn) {
 	defer conn.Close()
 	conn.SetReadLimit(1024)
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
@@ -84,8 +84,8 @@ func (h *Handler) readPump(client *eservice.Client, conn *websocket.Conn) {
 	}
 }
 
-// writePump отправляет периодические ping-сообщения для поддержания соединения.
-func (h *Handler) writePump(client *eservice.Client, conn *websocket.Conn, ctx context.Context) {
+// writePump отправляет ping-сообщения для поддержания соединения.
+func (h *Handler) writePump(conn *websocket.Conn, ctx context.Context) {
 	ticker := time.NewTicker(54 * time.Second)
 	defer func() {
 		ticker.Stop()

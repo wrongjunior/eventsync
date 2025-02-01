@@ -5,26 +5,46 @@ import (
 	"os"
 )
 
-// Config содержит настройки для сервера и клиента.
-type Config struct {
-	ServerAddr      string `json:"server_addr"`       // адрес HTTP-сервера (например, ":8080")
-	WSPath          string `json:"ws_path"`           // путь WebSocket (например, "/ws")
-	DBPath          string `json:"db_path"`           // путь к SQLite БД (например, "client.db")
-	LogLevel        string `json:"log_level"`         // уровень логирования (например, "INFO")
-	ClientServerURL string `json:"client_server_url"` // URL для подключения клиента (например, "ws://localhost:8080/ws")
+// ServerConfig содержит настройки сервера.
+type ServerConfig struct {
+	ServerAddr string `json:"server_addr"` // например, ":8080"
+	WSPath     string `json:"ws_path"`     // например, "/ws"
+	LogLevel   string `json:"log_level"`   // например, "INFO"
 }
 
-// LoadConfig загружает конфигурацию из указанного JSON-файла.
-func LoadConfig(path string) (*Config, error) {
+// ClientConfig содержит настройки клиента.
+type ClientConfig struct {
+	ClientServerURL string `json:"client_server_url"` // например, "ws://localhost:8080/ws"
+	DBPath          string `json:"db_path"`           // например, "client.db"
+	NumClients      int    `json:"num_clients"`       // количество одновременно запускаемых клиентов
+	LogLevel        string `json:"log_level"`         // например, "INFO"
+}
+
+// LoadServerConfig загружает конфигурацию сервера из файла.
+func LoadServerConfig(path string) (*ServerConfig, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	cfg := &Config{}
-	decoder := json.NewDecoder(f)
-	if err := decoder.Decode(cfg); err != nil {
+	cfg := &ServerConfig{}
+	if err := json.NewDecoder(f).Decode(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// LoadClientConfig загружает конфигурацию клиента из файла.
+func LoadClientConfig(path string) (*ClientConfig, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	cfg := &ClientConfig{}
+	if err := json.NewDecoder(f).Decode(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil

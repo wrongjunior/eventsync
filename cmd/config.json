@@ -1,7 +1,0 @@
-{
-  "server_addr": ":8080",
-  "ws_path": "/ws",
-  "db_path": "client.db",
-  "log_level": "INFO",
-  "client_server_url": "ws://localhost:8080/ws"
-}

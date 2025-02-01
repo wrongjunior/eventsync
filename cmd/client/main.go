@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,10 +19,10 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.json", "Path to configuration file")
+	configPath := flag.String("config", "config/client_config.json", "Path to client configuration file")
 	flag.Parse()
 
-	cfg, err := config.LoadConfig(*configPath)
+	cfg, err := config.LoadClientConfig(*configPath)
 	if err != nil {
 		panic(err)
 	}
@@ -30,7 +31,7 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 
-	// Открытие подключения к БД для клиентского репозитория.
+	// Открываем подключение к БД для клиентского репозитория.
 	db, err := sql.Open("sqlite3", cfg.DBPath)
 	if err != nil {
 		logger.Error("Failed to open database", "error", err)
@@ -42,21 +43,43 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Инициализация бизнес-логики клиента.
+	// Инициализируем бизнеслогику клиента.
 	clientService := service.NewClientService(repo, logger)
 
-	// Транспортный слой клиента (WebSocket-соединение).
-	ct := transportClient.NewClientTransport(cfg.ClientServerURL, clientService, logger)
+	// Создаем контекст, отменяемый сигналами ОС.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go ct.Listen(ctx)
+	// Используем WaitGroup для ожидания завершения всех клиентов.
+	var wg sync.WaitGroup
 
-	// Graceful shutdown.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
-	logger.Info("Shutting down client...")
-	cancel()
-	time.Sleep(2 * time.Second)
-	logger.Info("Client stopped")
+	// Запускаем заданное число клиентов.
+	numClients := cfg.NumClients
+	logger.Info("Starting clients", "num_clients", numClients)
+	for i := 0; i < numClients; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			logger.Info("Starting client", "client_id", id)
+			transport := transportClient.NewClientTransport(cfg.ClientServerURL, clientService, logger)
+			transport.Listen(ctx)
+			logger.Info("Client stopped", "client_id", id)
+		}(i + 1)
+	}
+
+	// Ожидаем сигнал завершения.
+	<-ctx.Done()
+	logger.Info("Shutdown signal received, waiting for clients to stop...")
+	// Ждем завершения всех клиентов (с таймаутом для graceful shutdown).
+	doneCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+	select {
+	case <-doneCh:
+		logger.Info("All clients stopped gracefully")
+	case <-time.After(5 * time.Second):
+		logger.Info("Timeout waiting for clients shutdown")
+	}
 }

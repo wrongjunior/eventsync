@@ -16,10 +16,10 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.json", "Path to configuration file")
+	configPath := flag.String("config", "config/server_config.json", "Path to server configuration file")
 	flag.Parse()
 
-	cfg, err := config.LoadConfig(*configPath)
+	cfg, err := config.LoadServerConfig(*configPath)
 	if err != nil {
 		panic(err)
 	}
@@ -28,17 +28,22 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 
-	// Инициализация бизнес-логики сервера.
+	// Инициализация бизнеслогики сервера.
 	eventService := service.NewEventService(logger)
 	eventService.StartEventGenerator()
 
+	// Настройка маршрутов через chi.
 	router := transportServer.SetupRouter(eventService, logger, cfg.WSPath)
 	httpServer := &http.Server{
 		Addr:    cfg.ServerAddr,
 		Handler: router,
 	}
 
-	// Запуск HTTP-сервера.
+	// Используем контекст, отменяемый сигналами ОС.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Запускаем HTTP-сервер в отдельной горутине.
 	go func() {
 		logger.Info("Starting HTTP server", "addr", cfg.ServerAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -46,17 +51,18 @@ func main() {
 		}
 	}()
 
-	// Обработка graceful shutdown.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
+	// Ожидаем сигнала завершения.
+	<-ctx.Done()
+	logger.Info("Shutdown signal received")
 
-	logger.Info("Shutting down server...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Инициируем graceful shutdown HTTP-сервера.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := httpServer.Shutdown(ctx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown error", "error", err)
 	}
+
+	// Завершаем работу генератора событий.
 	eventService.Shutdown()
-	logger.Info("Server stopped")
+	logger.Info("Server stopped gracefully")
 }

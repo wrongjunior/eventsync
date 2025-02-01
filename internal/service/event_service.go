@@ -11,17 +11,17 @@ import (
 	"log/slog"
 )
 
-// Notifier определяет интерфейс для отправки уведомлений (например, через WebSocket).
+// Notifier определяет интерфейс для уведомления клиента (например, через WebSocket).
 type Notifier interface {
 	Notify(event domain.Event)
 }
 
-// Client представляет абстрактного клиента для рассылки событий.
+// Client представляет абстрактного клиента (обёртка над Notifier).
 type Client struct {
 	Notifier Notifier
 }
 
-// EventService содержит бизнес-логику сервера: регистрацию клиентов, генерацию и рассылку событий.
+// EventService реализует бизнеслогку сервера: регистрация клиентов, генерация и рассылка событий.
 type EventService struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
@@ -57,7 +57,7 @@ func (s *EventService) Unregister(client *Client) {
 	s.logger.Info("Client unregistered")
 }
 
-// Broadcast отправляет событие всем зарегистрированным клиентам.
+// Broadcast рассылает событие всем зарегистрированным клиентам.
 func (s *EventService) Broadcast(event domain.Event) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -67,7 +67,7 @@ func (s *EventService) Broadcast(event domain.Event) {
 	s.logger.Info("Event broadcast", "event", event)
 }
 
-// StartEventGenerator генерирует события каждые 5 секунд.
+// StartEventGenerator запускает генерацию событий каждые 5 секунд.
 func (s *EventService) StartEventGenerator() {
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -95,7 +95,7 @@ func (s *EventService) StartEventGenerator() {
 	}()
 }
 
-// Shutdown останавливает генератор событий.
+// Shutdown корректно завершает работу сервиса.
 func (s *EventService) Shutdown() {
 	s.cancel()
 	s.logger.Info("EventService shutdown")

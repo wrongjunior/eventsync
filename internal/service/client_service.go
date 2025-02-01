@@ -8,7 +8,7 @@ import (
 	"log/slog"
 )
 
-// ClientService содержит бизнес-логику клиента: фильтрация дубликатов и сохранение событий.
+// ClientService реализует бизнеслогику клиента: фильтрация дубликатов и сохранение событий.
 type ClientService struct {
 	repo        repository.EventRepository
 	logger      *slog.Logger
@@ -16,7 +16,7 @@ type ClientService struct {
 	receivedIDs map[string]struct{}
 }
 
-// NewClientService создаёт новый клиентский сервис.
+// NewClientService создаёт новый экземпляр клиентского сервиса.
 func NewClientService(repo repository.EventRepository, logger *slog.Logger) *ClientService {
 	return &ClientService{
 		repo:        repo,
@@ -25,7 +25,7 @@ func NewClientService(repo repository.EventRepository, logger *slog.Logger) *Cli
 	}
 }
 
-// ProcessEvent обрабатывает событие, фильтруя дубликаты, и сохраняет его через репозиторий.
+// ProcessEvent фильтрует дубли и сохраняет событие.
 func (cs *ClientService) ProcessEvent(event domain.Event) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()

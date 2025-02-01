@@ -12,7 +12,7 @@ import (
 	"log/slog"
 )
 
-// ClientTransport реализует транспортный слой клиента: соединение, получение сообщений и переподключение.
+// ClientTransport реализует транспортный слой клиента: подключение, получение сообщений и переподключение.
 type ClientTransport struct {
 	ServerURL     string
 	Conn          *websocket.Conn
@@ -91,13 +91,12 @@ func (ct *ClientTransport) reconnect(ctx context.Context) {
 			ct.Logger.Info("Reconnection cancelled")
 			return
 		default:
-			err := ct.connect()
-			if err == nil {
+			if err := ct.connect(); err == nil {
 				ct.reconnecting = false
 				ct.Logger.Info("Reconnected successfully")
 				return
 			}
-			ct.Logger.Error("Reconnection attempt failed", "error", err)
+			ct.Logger.Error("Reconnection attempt failed", "error", "connection error")
 			time.Sleep(backoff)
 			if backoff < 30*time.Second {
 				backoff *= 2

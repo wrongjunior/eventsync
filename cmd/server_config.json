@@ -1,0 +1,5 @@
+{
+  "server_addr": ":8080",
+  "ws_path": "/ws",
+  "log_level": "INFO"
+}
