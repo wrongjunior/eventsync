@@ -21,7 +21,7 @@
 ### 🔧 Установка
 1. Клонируйте репозиторий:
    ```bash
-   git clone https://github.com/example/eventsync.git
+   git clone https://github.com/wrongjunior/eventsync.git
    cd eventsync
    ```
 2. Установите зависимости:
